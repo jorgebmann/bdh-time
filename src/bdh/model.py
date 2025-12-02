@@ -7,6 +7,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+
 @dataclasses.dataclass
 class BDHConfig:
     """
@@ -24,13 +25,14 @@ def get_freqs(n, theta, dtype):
     """
     Calculates frequencies for Rotary Positional Encoding.
     """
+
     def quantize(t, q=2):
         return (t / q).floor() * q
 
     return (
-        1.0
-        / (theta ** (quantize(torch.arange(0, n, 1, dtype=dtype)) / n))
-        / (2 * math.pi)
+            1.0
+            / (theta ** (quantize(torch.arange(0, n, 1, dtype=dtype)) / n))
+            / (2 * math.pi)
     )
 
 
@@ -38,19 +40,20 @@ class Attention(torch.nn.Module):
     """
     The core Attention module, implementing Linear Attention with RoPE.
     """
+
     def __init__(self, config: BDHConfig):
         super().__init__()
         self.config = config
         nh = config.n_head
         D = config.n_embd
-        
+
         # The size of the conceptual space per head
         N = config.mlp_internal_dim_multiplier * D // nh
-        
+
         # Frequencies are stored in a buffer
         self.register_buffer(
             "freqs",
-            get_freqs(N, theta=2**16, dtype=torch.float32).view(1, 1, 1, N)
+            get_freqs(N, theta=2 ** 16, dtype=torch.float32).view(1, 1, 1, N)
         )
 
     @staticmethod
@@ -67,35 +70,44 @@ class Attention(torch.nn.Module):
         # Create a rotated version of the vector v
         v_rot = torch.stack((-v[..., 1::2], v[..., ::2]), dim=-1).view(*v.size())
         phases_cos, phases_sin = Attention.phases_cos_sin(phases)
-        
+
         # Apply the rotation
         return (v * phases_cos).to(v.dtype) + (v_rot * phases_sin).to(v.dtype)
 
-    def forward(self, Q, K, V):
+    def forward(self, Q, K, V, is_causal=True):
+        """
+        Args:
+            Q, K, V: Input tensors
+            is_causal: If True, applies a causal mask (future tokens cannot be seen).
+                       If False, allows bidirectional attention (used for classification).
+        """
         assert self.freqs.dtype == torch.float32
-        assert K is Q # This attention mechanism assumes Q and K are the same
-        
-        _, _, T, _ = Q.size() # Get the sequence length T
+        assert K is Q  # This attention mechanism assumes Q and K are the same
+
+        _, _, T, _ = Q.size()  # Get the sequence length T
 
         # Calculate phases for RoPE based on token position
         r_phases = (
-            torch.arange(
-                0,
-                T,
-                device=self.freqs.device,
-                dtype=self.freqs.dtype,
-            ).view(1, 1, -1, 1)
-        ) * self.freqs
-        
+                       torch.arange(
+                           0,
+                           T,
+                           device=self.freqs.device,
+                           dtype=self.freqs.dtype,
+                       ).view(1, 1, -1, 1)
+                   ) * self.freqs
+
         # Apply RoPE to Queries and Keys
         QR = self.rope(r_phases, Q)
-        KR = QR # Since Q and K are the same
+        KR = QR  # Since Q and K are the same
 
         # --- THIS IS THE LINEAR ATTENTION ---
         # Note the absence of softmax. This is the core of the efficient implementation.
-        # .tril() applies the causal mask.
-        scores = (QR @ KR.mT).tril(diagonal=-1)
-        
+        scores = (QR @ KR.mT)
+
+        # Apply Causal Mask only if requested (default for LM, False for Classifier)
+        if is_causal:
+            scores = scores.tril(diagonal=-1)
+
         return scores @ V
 
 
@@ -103,31 +115,32 @@ class BDH(nn.Module):
     """
     The full BDH model.
     """
+
     def __init__(self, config: BDHConfig):
         super().__init__()
         assert config.vocab_size is not None
         self.config = config
         nh = config.n_head
         D = config.n_embd
-        
+
         # The size of the conceptual space per head
         N = D * config.mlp_internal_dim_multiplier // nh
-        
+
         # --- Parameter Definitions ---
         self.decoder = nn.Parameter(torch.zeros((nh * N, D)).normal_(std=0.02))
         self.encoder = nn.Parameter(torch.zeros((nh, D, N)).normal_(std=0.02))
         self.encoder_v = nn.Parameter(torch.zeros((nh, D, N)).normal_(std=0.02))
-        
+
         # --- Module Definitions ---
         self.attn = Attention(config)
         self.ln = nn.LayerNorm(D, elementwise_affine=False, bias=False)
         self.embed = nn.Embedding(config.vocab_size, D)
         self.drop = nn.Dropout(config.dropout)
-        
+
         # --- RESEARCH HOOK POINT ---
         # This layer does nothing but provides a clean point to attach hooks for analysis.
         self.x_sparse_hook_point = nn.Identity()
-        
+
         # --- Language Model Head ---
         self.lm_head = nn.Parameter(
             torch.zeros((D, config.vocab_size)).normal_(std=0.02)
@@ -145,7 +158,7 @@ class BDH(nn.Module):
         elif isinstance(module, nn.Embedding):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, is_causal=True):
         C = self.config
         B, T = idx.size()
         D = C.n_embd
@@ -153,14 +166,14 @@ class BDH(nn.Module):
         N = D * C.mlp_internal_dim_multiplier // nh
 
         # 1. Embedding
-        x = self.embed(idx).unsqueeze(1) # (B, 1, T, D)
+        x = self.embed(idx).unsqueeze(1)  # (B, 1, T, D)
         x = self.ln(x)
 
         # 2. Processing through layers
         for _ in range(C.n_layer):
             # --- This is one block of the BDH architecture ---
-            x_res = x # Store for residual connection
-            
+            x_res = x  # Store for residual connection
+
             # Project to conceptual space
             x_latent = x @ self.encoder
             x_sparse = F.relu(x_latent)  # (B, nh, T, N)
@@ -172,7 +185,8 @@ class BDH(nn.Module):
             yKV = self.attn(
                 Q=x_sparse,
                 K=x_sparse,
-                V=x, # Note: Values are the original, dense vectors
+                V=x,  # Note: Values are the original, dense vectors
+                is_causal=is_causal  # Pass the causality flag down
             )
             yKV = self.ln(yKV)
 
@@ -184,16 +198,16 @@ class BDH(nn.Module):
 
             # Project back to working space
             yMLP = (
-                xy_sparse.transpose(1, 2).reshape(B, 1, T, N * nh) @ self.decoder
+                    xy_sparse.transpose(1, 2).reshape(B, 1, T, N * nh) @ self.decoder
             )
             y = self.ln(yMLP)
-            
+
             # Apply residual connection
             x = self.ln(x_res + y)
 
         # 3. Final readout (Language Model Head)
         logits = x.view(B, T, D) @ self.lm_head
-        
+
         # 4. Calculate loss
         loss = None
         if targets is not None:
@@ -203,35 +217,34 @@ class BDH(nn.Module):
 
     @torch.no_grad()
     def generate(
-        self,
-        idx: torch.Tensor,
-        max_new_tokens: int,
-        temperature: float = 1.0,
-        top_k: int | None = None,
+            self,
+            idx: torch.Tensor,
+            max_new_tokens: int,
+            temperature: float = 1.0,
+            top_k: int | None = None,
     ) -> torch.Tensor:
         """
         Generate new tokens autoregressively.
         """
         self.eval()
         for _ in range(max_new_tokens):
-            # We don't need to crop context, the model handles long sequences
-            logits, _ = self(idx)
-            
+            # Generation is strictly causal
+            logits, _ = self(idx, is_causal=True)
+
             # Focus on the last token's logits
             logits = logits[:, -1, :] / temperature
-            
+
             # Optional: Top-k sampling
             if top_k is not None:
                 values, _ = torch.topk(logits, min(top_k, logits.size(-1)))
                 logits[logits < values[:, [-1]]] = float("-inf")
-                
+
             # Get probabilities and sample the next token
             probs = F.softmax(logits, dim=-1)
             idx_next = torch.multinomial(probs, num_samples=1)
-            
+
             # Append the new token
             idx = torch.cat((idx, idx_next), dim=1)
-            
+
         self.train()
         return idx
-

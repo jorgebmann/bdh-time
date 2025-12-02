@@ -248,6 +248,8 @@ class EODHDClient:
         """
         Batch fetch OHLCV data for multiple symbols with rate limiting.
         
+        Note: This method is currently unused but kept for potential future use.
+        
         Args:
             symbols: List of symbol strings
             start_date: Start date (YYYY-MM-DD)

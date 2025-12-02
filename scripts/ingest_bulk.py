@@ -11,7 +11,7 @@ import logging
 API_TOKEN = "692b5170c9fb15.77141019"
 EXCHANGE = "US"  # 'US' usually covers NYSE, NASDAQ, AMEX in EODHD bulk.
 # If 'US' fails, loop through ['NYSE', 'NASDAQ']
-START_DATE = "1995-01-01"
+START_DATE = "2020-05-30"
 END_DATE = datetime.now().strftime('%Y-%m-%d')
 OUTPUT_DIR = "data/raw_daily"
 

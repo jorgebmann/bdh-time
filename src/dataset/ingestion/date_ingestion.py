@@ -210,6 +210,9 @@ class DateIngestionManager:
         """
         Ingest all symbols from an exchange.
         
+        Note: This method is currently unused but kept for potential future use.
+        The ingest_stocks.py script handles exchange ingestion directly.
+        
         Args:
             exchange: Exchange code (e.g., 'NASDAQ')
             start_date: Start date (YYYY-MM-DD)
