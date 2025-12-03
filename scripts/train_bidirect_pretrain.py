@@ -76,7 +76,7 @@ def train(args):
     if args.dataset:
         data_path = Path(args.dataset)
     else:
-        data_path = Path(__file__).parent.parent / "data" / "market_dataset.pt"
+        data_path = Path(__file__).parent.parent / "data" / "pretrain_dataset.pt"
     
     if not data_path.exists():
         print(f"\nError: Processed dataset not found at {data_path}")
