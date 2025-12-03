@@ -43,35 +43,95 @@ DEFAULT_DROPOUT = 0.3
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def load_dataset_info(data_path):
-    """Load and display dataset metadata."""
-    data = torch.load(data_path, map_location='cpu')
+    """Load and display dataset metadata without loading full tensors."""
+    import gc
+    
+    print(f"\nLoading dataset metadata from {data_path}...")
+    
+    try:
+        checkpoint = torch.load(data_path, map_location='cpu', weights_only=False)
+        
+        # Extract shapes before clearing
+        x_tensor = checkpoint.get('X', None)
+        y_tensor = checkpoint.get('Y', None)
+        mask_tensor = checkpoint.get('mask', None)
+        
+        x_shape_str = str(x_tensor.shape) if x_tensor is not None and hasattr(x_tensor, 'shape') else 'N/A'
+        y_shape_str = str(y_tensor.shape) if y_tensor is not None and hasattr(y_tensor, 'shape') else 'N/A'
+        mask_shape_str = str(mask_tensor.shape) if mask_tensor is not None and hasattr(mask_tensor, 'shape') else 'N/A'
+        
+        # Calculate coverage if mask exists
+        coverage = None
+        if mask_tensor is not None and hasattr(mask_tensor, 'sum'):
+            coverage = mask_tensor.sum().item() / mask_tensor.numel() * 100
+        
+        # Extract feature count
+        num_features = None
+        if x_tensor is not None and hasattr(x_tensor, 'shape') and len(x_tensor.shape) >= 3:
+            num_features = x_tensor.shape[-1]
+        
+        # Extract time steps
+        time_steps = None
+        if x_tensor is not None and hasattr(x_tensor, 'shape') and len(x_tensor.shape) >= 1:
+            time_steps = x_tensor.shape[0]
+        
+        # Extract metadata
+        info = {
+            'asset_names': checkpoint.get('asset_names', []),
+            'feature_names': checkpoint.get('feature_names', []),
+            'asset_date_ranges': checkpoint.get('asset_date_ranges', []),
+            'union_dates': checkpoint.get('union_dates', []),
+            'x_shape': x_shape_str,
+            'y_shape': y_shape_str,
+            'mask_shape': mask_shape_str,
+            'coverage': coverage,
+            'num_features': num_features,
+            'time_steps': time_steps
+        }
+        
+        # Immediately delete large tensors to free memory
+        if 'X' in checkpoint:
+            del checkpoint['X']
+        if 'Y' in checkpoint:
+            del checkpoint['Y']
+        if 'mask' in checkpoint:
+            del checkpoint['mask']
+        del x_tensor, y_tensor, mask_tensor, checkpoint
+        gc.collect()
+        
+    except Exception as e:
+        print(f"Error loading dataset: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
     
     print("\n" + "="*60)
     print("DATASET INFORMATION")
     print("="*60)
     print(f"Dataset file: {data_path}")
-    print(f"Assets: {len(data['asset_names'])}")
-    print(f"Time steps: {data['X'].shape[0]}")
-    print(f"Features per asset: {data['X'].shape[2]}")
-    print(f"Data shape X: {data['X'].shape}")
-    print(f"Data shape Y: {data['Y'].shape}")
+    print(f"Assets: {len(info['asset_names'])}")
+    if info['time_steps'] is not None:
+        print(f"Time steps: {info['time_steps']}")
+    if info['num_features'] is not None:
+        print(f"Features per asset: {info['num_features']}")
+    print(f"Data shape X: {info['x_shape']}")
+    print(f"Data shape Y: {info['y_shape']}")
     
-    if 'mask' in data:
-        valid_ratio = data['mask'].sum() / data['mask'].size * 100
-        print(f"Data coverage: {valid_ratio:.1f}% valid (union-based alignment)")
+    if info['mask_shape'] != 'N/A' and info['coverage'] is not None:
+        print(f"Data coverage: {info['coverage']:.1f}% valid (union-based alignment)")
     
-    if 'asset_date_ranges' in data:
+    if info['asset_date_ranges']:
         print(f"\nDate ranges (showing first 5 assets):")
-        for i, (name, (start, end)) in enumerate(zip(data['asset_names'], data['asset_date_ranges'])):
+        for i, (name, (start, end)) in enumerate(zip(info['asset_names'], info['asset_date_ranges'])):
             if i < 5:
                 print(f"  {name}: {start} to {end}")
             elif i == 5:
-                print(f"  ... ({len(data['asset_names']) - 5} more assets)")
+                print(f"  ... ({len(info['asset_names']) - 5} more assets)")
                 break
     
     print("="*60 + "\n")
     
-    return data
+    return info
 
 
 def train(args):
