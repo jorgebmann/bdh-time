@@ -32,3 +32,4 @@ requests>=2.28.0
 pyarrow>=10.0.0  # Parquet file support
 pyyaml>=6.0
 python-dateutil>=2.8.0
+yfinance>=0.2.0  # Yahoo Finance data download

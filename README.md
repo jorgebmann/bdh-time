@@ -10,10 +10,9 @@ This repository contains the PyTorch implementation of the **BDH (Biological Dra
 │   ├── bdh/                    # Core BDH model package
 │   │   ├── __init__.py
 │   │   ├── model.py           # Core BDH model and attention mechanism
-│   │   ├── classifier.py      # Text classification wrapper
+│   │   ├── classifier.py      # Text classification wrapper (for SST-2)
 │   │   ├── market.py          # Market prediction model
-│   │   ├── data.py            # Market dataset loader
-│   │   └── preprocess.py      # Data preprocessing utilities
+│   │   └── data.py            # Market dataset loader
 │   └── dataset/               # Data ingestion and processing
 │       ├── ingestion/         # EODHD API client and parquet storage
 │       └── preprocess.py      # Market data preprocessing
@@ -21,7 +20,9 @@ This repository contains the PyTorch implementation of the **BDH (Biological Dra
 │   ├── train_market.py        # Market model training script
 │   ├── build_dataset.py       # Build processed market dataset
 │   ├── ingest_stocks.py       # Ingest stock data from EODHD API
-│   └── debug_data.py          # Data debugging utilities
+│   ├── download_nasdaq100_yfinance.py  # Download NASDAQ100 from yfinance
+│   ├── ingest_bulk.py         # Bulk EODHD ingestion (alternative method)
+│   └── debug_data.py          # Data debugging utilities (legacy)
 ├── data/                      # Data storage
 │   ├── parquet/               # Parquet-formatted stock data
 │   └── market_dataset.pt      # Processed market dataset
@@ -98,7 +99,7 @@ This creates `data/market_dataset.pt` with processed features:
 Train the MarketBDH model:
 
 ```bash
-python scripts/train_market.py
+python scripts/train_bidirect_finetune.py
 ```
 
 The training script includes:
@@ -211,7 +212,8 @@ Ingestion:
 
 ### Debugging
 
-Use `scripts/debug_data.py` to inspect processed datasets and verify data quality.
+- Use `scripts/debug_data.py` to inspect processed datasets and verify data quality (legacy utility)
+- Check parquet files directly using pandas: `pd.read_parquet('data/parquet/nasdaq100/AAPL_US.parquet')`
 
 ## License
 

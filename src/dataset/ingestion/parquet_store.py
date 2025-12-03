@@ -66,8 +66,13 @@ class ParquetStore:
         
         # Reset index to make date a column for Parquet
         df_write = df.reset_index()
-        if df_write.columns[0] == 'index':
-            df_write.rename(columns={'index': 'date'}, inplace=True)
+        # Handle different index names - rename to 'date' for consistency
+        first_col = df_write.columns[0]
+        if first_col in ['index', 'Date', 'DATE'] or first_col.lower() == 'date':
+            df_write.rename(columns={first_col: 'date'}, inplace=True)
+        elif first_col != 'date':
+            # If first column is not already 'date', rename it
+            df_write.rename(columns={first_col: 'date'}, inplace=True)
         
         symbol_path = self._get_symbol_path(symbol, library)
         
@@ -76,9 +81,48 @@ class ParquetStore:
             # Read existing data
             try:
                 existing_df = pd.read_parquet(symbol_path)
-                if 'date' in existing_df.columns:
-                    existing_df['date'] = pd.to_datetime(existing_df['date'])
-                    existing_df.set_index('date', inplace=True)
+                
+                # Handle date column - check multiple possible names
+                date_col = None
+                for col_name in ['date', 'Date', 'DATE', '__index_level_0__']:
+                    if col_name in existing_df.columns:
+                        date_col = col_name
+                        break
+                
+                # Also check if any column name contains 'date' (case insensitive)
+                if date_col is None:
+                    for col_name in existing_df.columns:
+                        if 'date' in col_name.lower():
+                            date_col = col_name
+                            break
+                
+                # Set date as index if found
+                if date_col:
+                    # Convert to datetime, handling various input types (integers, strings, etc.)
+                    existing_df[date_col] = pd.to_datetime(existing_df[date_col], errors='coerce')
+                    # Drop rows where date conversion failed
+                    existing_df = existing_df.dropna(subset=[date_col])
+                    if existing_df.empty:
+                        raise ValueError("No valid dates after conversion")
+                    existing_df.set_index(date_col, inplace=True)
+                elif isinstance(existing_df.index, pd.DatetimeIndex):
+                    # Already has datetime index
+                    pass
+                else:
+                    # Try to convert index to datetime
+                    existing_df.index = pd.to_datetime(existing_df.index, errors='coerce')
+                    # Drop rows where date conversion failed
+                    existing_df = existing_df.dropna()
+                    if existing_df.empty:
+                        raise ValueError("No valid dates after index conversion")
+                
+                # Ensure index is datetime
+                if not isinstance(existing_df.index, pd.DatetimeIndex):
+                    raise ValueError("Existing data does not have datetime index")
+                
+                # Ensure both dataframes have datetime indexes before combining
+                if not isinstance(df.index, pd.DatetimeIndex):
+                    raise ValueError("New data does not have datetime index")
                 
                 # Combine and deduplicate
                 combined = pd.concat([existing_df, df])
@@ -125,14 +169,60 @@ class ParquetStore:
         try:
             df = pd.read_parquet(symbol_path)
             
+            # Debug: log column names and index info
+            logger.debug(f"Reading {symbol}: columns={df.columns.tolist()}, index_name={df.index.name}, index_type={type(df.index)}")
+            
+            # Try to find date column - check multiple possible names
+            date_col = None
+            for col_name in ['date', 'Date', 'DATE', 'index', 'Date', '__index_level_0__']:
+                if col_name in df.columns:
+                    date_col = col_name
+                    break
+            
+            # Also check if any column name contains 'date' (case insensitive)
+            if date_col is None:
+                for col_name in df.columns:
+                    if 'date' in col_name.lower():
+                        date_col = col_name
+                        break
+            
             # Set date as index
-            if 'date' in df.columns:
-                df['date'] = pd.to_datetime(df['date'])
-                df.set_index('date', inplace=True)
-            elif df.index.name == 'date' or isinstance(df.index, pd.DatetimeIndex):
-                pass  # Already has date index
+            if date_col:
+                df[date_col] = pd.to_datetime(df[date_col])
+                df.set_index(date_col, inplace=True)
+            elif isinstance(df.index, pd.DatetimeIndex):
+                # Already has datetime index
+                pass
+            elif df.index.name in ['date', 'Date', 'DATE']:
+                # Index is named date but might not be datetime - try to convert
+                try:
+                    df.index = pd.to_datetime(df.index)
+                except:
+                    logger.warning(f"Could not convert index to datetime for {symbol}")
+                    return None
             else:
-                logger.warning(f"Could not find date column/index in {symbol}")
+                # Check if first column looks like dates
+                first_col = df.columns[0]
+                try:
+                    # Try to parse first column as dates
+                    test_dates = pd.to_datetime(df[first_col].head(5))
+                    if test_dates.notna().all():
+                        # First column appears to be dates
+                        df[first_col] = pd.to_datetime(df[first_col])
+                        df.set_index(first_col, inplace=True)
+                        logger.debug(f"Using first column '{first_col}' as date index for {symbol}")
+                    else:
+                        logger.warning(f"Could not find date column/index in {symbol}. Columns: {df.columns.tolist()}, Index: {df.index.name}")
+                        logger.info(f"File structure - Shape: {df.shape}, Dtypes: {df.dtypes.to_dict()}")
+                        return None
+                except Exception as parse_err:
+                    logger.warning(f"Could not parse first column as dates for {symbol}: {parse_err}")
+                    logger.warning(f"Columns: {df.columns.tolist()}, Index: {df.index.name}")
+                    return None
+            
+            # Ensure index is datetime
+            if not isinstance(df.index, pd.DatetimeIndex):
+                logger.warning(f"Index is not datetime for {symbol} after processing")
                 return None
             
             # Apply date filtering if requested
@@ -147,6 +237,8 @@ class ParquetStore:
             return df
         except Exception as e:
             logger.error(f"Error reading {symbol}: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
             return None
     
     def get_date_range(self, symbol: str, library: str = 'stocks') -> Optional[Tuple[datetime, datetime]]:
