@@ -13,11 +13,11 @@ class BDHConfig:
     """
     Configuration class for the BDH model.
     """
-    n_layer: int = 6
-    n_embd: int = 256
-    dropout: float = 0.1
-    n_head: int = 4
-    mlp_internal_dim_multiplier: int = 128
+    n_layer: int = 2 # Shallow network to prevent overfitting
+    n_embd: int = 128 # Kept small to control the input projection size (~76M params)
+    dropout: float = 0.3 # High dropout due to low SNR in financial data
+    n_head: int = 4 # 32 dimensions per head
+    mlp_internal_dim_multiplier: int = 32 # Expands internal state to 4096 dimensions
     vocab_size: int = 256
 
 

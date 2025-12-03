@@ -20,7 +20,8 @@ from datetime import datetime
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
-from bdh.market_bidirect import MarketBDH, MarketBDHConfig, load_pretrained_weights
+from bdh.market_bidirect import MarketBDHConfig
+from bdh.market_bidirect_finetune import MarketBDH, load_pretrained_weights
 from bdh.data import MarketDataset
 
 # --- Default Configuration ---
@@ -31,7 +32,7 @@ DEFAULT_LEARNING_RATE = 5e-5
 DEFAULT_EVAL_FREQ = 50
 DEFAULT_WEIGHT_DECAY = 0.01
 DEFAULT_GRAD_CLIP = 1.0
-DEFAULT_LABEL_SMOOTHING = 0.1
+DEFAULT_LABEL_SMOOTHING = 0.01 # Softens targets to prevent overconfidence
 DEFAULT_EARLY_STOP_PATIENCE = 50
 DEFAULT_VAL_SPLIT = 0.2
 DEFAULT_N_LAYER = 2

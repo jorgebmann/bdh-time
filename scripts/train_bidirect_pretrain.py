@@ -21,22 +21,23 @@ from datetime import datetime
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent / "src"))
 
-from bdh.market_bidirect import MarketBDHPretrain, MarketBDHConfig
+from bdh.market_bidirect import MarketBDHConfig
+from bdh.market_bidirect_pretrain import MarketBDHPretrain
 from bdh.data import MarketDataset
 
 # --- Default Configuration ---
 DEFAULT_BATCH_SIZE = 32
-DEFAULT_WINDOW_SIZE = 32
+DEFAULT_WINDOW_SIZE = 64
 DEFAULT_MAX_ITERS = 5000  # More iterations for pre-training
 DEFAULT_LEARNING_RATE = 1e-4  # Higher LR for pre-training
-DEFAULT_EVAL_FREQ = 100
-DEFAULT_WEIGHT_DECAY = 0.01
+DEFAULT_EVAL_FREQ = 250
+DEFAULT_WEIGHT_DECAY = 0.1 #Aggressive regularization. It penalizes large weights, preventing the model from relying too heavily on any single feature or asset.
 DEFAULT_GRAD_CLIP = 1.0
-DEFAULT_EARLY_STOP_PATIENCE = 100
+DEFAULT_EARLY_STOP_PATIENCE = 5
 DEFAULT_VAL_SPLIT = 0.2
 DEFAULT_N_LAYER = 2
 DEFAULT_N_EMBD = 128
-DEFAULT_N_HEAD = 2
+DEFAULT_N_HEAD = 4
 DEFAULT_DROPOUT = 0.3
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
