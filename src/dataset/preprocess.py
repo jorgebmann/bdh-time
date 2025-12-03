@@ -1,11 +1,11 @@
 import pickle
+from typing import List, Optional, Tuple
+
 import numpy as np
 import pandas as pd
-from typing import List, Optional, Tuple
-from pathlib import Path
 
 
-def _process_single_dataframe(df: pd.DataFrame, ticker: str) -> Tuple[Optional[pd.DataFrame], List[str]]:
+def process_single_dataframe(df: pd.DataFrame, ticker: str, include_target: bool = True) -> Tuple[Optional[pd.DataFrame], List[str]]:
     """
     Process a single DataFrame to extract both baseline and BDH-optimized features.
 
@@ -17,6 +17,8 @@ def _process_single_dataframe(df: pd.DataFrame, ticker: str) -> Tuple[Optional[p
     Args:
         df: DataFrame with datetime index and OHLCV columns (may include sentiment)
         ticker: Ticker symbol for logging
+        include_target: If True, create binary classification target (for fine-tuning).
+                       If False, skip target creation (for pre-training).
 
     Returns:
         Tuple(Processed DataFrame, List of feature column names) or (None, [])
@@ -136,15 +138,16 @@ def _process_single_dataframe(df: pd.DataFrame, ticker: str) -> Tuple[Optional[p
     df['Streak_Inh'] = up_strain
     df['Streak_Exc'] = down_strain
 
-    # --- Target Generation ---
-    # Next Step Return Direction
-    next_ret = np.log(df['Close'] / df['Close'].shift(1)).shift(-1)
-    df['Target'] = (next_ret > 0).astype(int)
+    # --- Target Generation (only if needed for fine-tuning) ---
+    if include_target:
+        # Next Step Return Direction
+        next_ret = np.log(df['Close'] / df['Close'].shift(1)).shift(-1)
+        df['Target'] = (next_ret > 0).astype(int)
 
     # --- Collect Feature Columns ---
     original_cols = ['Pos_Mom', 'Neg_Mom', 'Vol_Energy', 'Vol_Norm']
     bdh_cols = [c for c in df.columns if c.endswith('_Exc') or c.endswith('_Inh')]
-    
+
     # Add sentiment if present
     sentiment_cols = []
     if has_sentiment and 'sentiment' in df.columns:
@@ -153,7 +156,10 @@ def _process_single_dataframe(df: pd.DataFrame, ticker: str) -> Tuple[Optional[p
     feature_cols = original_cols + bdh_cols + sentiment_cols
 
     # Keep only relevant columns
-    final_cols = feature_cols + ['Target']
+    if include_target:
+        final_cols = feature_cols + ['Target']
+    else:
+        final_cols = feature_cols
     df = df[final_cols]
 
     # Drop NaNs (dominated by 200-day MA)
@@ -185,7 +191,7 @@ def process_market_data_from_dataframes(dfs: List[pd.DataFrame], asset_names: Li
     print(f"Filtering stocks. Need >{total_required} days history...")
 
     for df, ticker in zip(dfs, asset_names):
-        proc_df, feats = _process_single_dataframe(df.copy(), ticker)
+        proc_df, feats = process_single_dataframe(df.copy(), ticker)
 
         if proc_df is not None:
             if not feature_columns:

@@ -33,15 +33,20 @@ class MarketDataset(Dataset):
         data = torch.load(data_path)
 
         self.raw_X = data['X']  # Shape: [Total_Time, Num_Assets, Num_Features]
-        self.raw_Y = data['Y']  # Shape: [Total_Time, Num_Assets]
+        # Y is optional (not present in pre-training datasets)
+        self.raw_Y = data.get('Y', None)  # Shape: [Total_Time, Num_Assets] or None
         self.asset_names = data['asset_names']
 
         # Handle mask if present
         if 'mask' in data:
             self.mask = data['mask']  # Shape: [Total_Time, Num_Assets]
         else:
-            # If no mask, assume all data is valid
-            self.mask = np.ones_like(self.raw_Y, dtype=np.float32)
+            # If no mask, assume all data is valid (use X shape for mask)
+            if isinstance(self.raw_X, torch.Tensor):
+                mask_shape = (self.raw_X.shape[0], self.raw_X.shape[1])
+            else:
+                mask_shape = self.raw_X.shape[:2]
+            self.mask = np.ones(mask_shape, dtype=np.float32)
 
         self.num_assets = len(self.asset_names)
         self.num_features = self.raw_X.shape[-1]
@@ -52,7 +57,7 @@ class MarketDataset(Dataset):
 
         if split == 'train':
             self.X = self.raw_X[:split_idx]
-            self.Y = self.raw_Y[:split_idx]
+            self.Y = self.raw_Y[:split_idx] if self.raw_Y is not None else None
             self.mask = self.mask[:split_idx]
 
             # --- MASKED NORMALIZATION ---
@@ -88,7 +93,7 @@ class MarketDataset(Dataset):
 
         else:
             self.X = self.raw_X[split_idx:]
-            self.Y = self.raw_Y[split_idx:]
+            self.Y = self.raw_Y[split_idx:] if self.raw_Y is not None else None
             self.mask = self.mask[split_idx:]
 
             # Use provided normalization statistics (from training set)
@@ -150,5 +155,7 @@ class MarketDataset(Dataset):
                 return x, x_next, mask_next
         else:
             # For fine-tuning: return Y (classification targets)
+            if self.Y is None:
+                raise ValueError("Y (targets) not found in dataset. This dataset appears to be for pre-training only.")
             y = torch.from_numpy(self.Y[start:end])
             return x, y, mask

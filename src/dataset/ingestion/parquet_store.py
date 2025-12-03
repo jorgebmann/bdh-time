@@ -81,9 +81,48 @@ class ParquetStore:
             # Read existing data
             try:
                 existing_df = pd.read_parquet(symbol_path)
-                if 'date' in existing_df.columns:
-                    existing_df['date'] = pd.to_datetime(existing_df['date'])
-                    existing_df.set_index('date', inplace=True)
+                
+                # Handle date column - check multiple possible names
+                date_col = None
+                for col_name in ['date', 'Date', 'DATE', '__index_level_0__']:
+                    if col_name in existing_df.columns:
+                        date_col = col_name
+                        break
+                
+                # Also check if any column name contains 'date' (case insensitive)
+                if date_col is None:
+                    for col_name in existing_df.columns:
+                        if 'date' in col_name.lower():
+                            date_col = col_name
+                            break
+                
+                # Set date as index if found
+                if date_col:
+                    # Convert to datetime, handling various input types (integers, strings, etc.)
+                    existing_df[date_col] = pd.to_datetime(existing_df[date_col], errors='coerce')
+                    # Drop rows where date conversion failed
+                    existing_df = existing_df.dropna(subset=[date_col])
+                    if existing_df.empty:
+                        raise ValueError("No valid dates after conversion")
+                    existing_df.set_index(date_col, inplace=True)
+                elif isinstance(existing_df.index, pd.DatetimeIndex):
+                    # Already has datetime index
+                    pass
+                else:
+                    # Try to convert index to datetime
+                    existing_df.index = pd.to_datetime(existing_df.index, errors='coerce')
+                    # Drop rows where date conversion failed
+                    existing_df = existing_df.dropna()
+                    if existing_df.empty:
+                        raise ValueError("No valid dates after index conversion")
+                
+                # Ensure index is datetime
+                if not isinstance(existing_df.index, pd.DatetimeIndex):
+                    raise ValueError("Existing data does not have datetime index")
+                
+                # Ensure both dataframes have datetime indexes before combining
+                if not isinstance(df.index, pd.DatetimeIndex):
+                    raise ValueError("New data does not have datetime index")
                 
                 # Combine and deduplicate
                 combined = pd.concat([existing_df, df])

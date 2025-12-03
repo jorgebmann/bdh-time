@@ -99,7 +99,7 @@ This creates `data/market_dataset.pt` with processed features:
 Train the MarketBDH model:
 
 ```bash
-python scripts/train_market.py
+python scripts/train_bidirect_finetune.py
 ```
 
 The training script includes:
