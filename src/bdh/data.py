@@ -30,23 +30,38 @@ class MarketDataset(Dataset):
 
         # Load processed data
         print(f"Loading processed dataset from {data_path}...")
-        data = torch.load(data_path)
+        data = torch.load(data_path, map_location='cpu')
 
         self.raw_X = data['X']  # Shape: [Total_Time, Num_Assets, Num_Features]
         # Y is optional (not present in pre-training datasets)
         self.raw_Y = data.get('Y', None)  # Shape: [Total_Time, Num_Assets] or None
         self.asset_names = data['asset_names']
 
+        # Ensure X is a tensor
+        if not isinstance(self.raw_X, torch.Tensor):
+            self.raw_X = torch.from_numpy(self.raw_X).float()
+        else:
+            self.raw_X = self.raw_X.float()
+
+        # Ensure Y is a tensor if present
+        if self.raw_Y is not None:
+            if not isinstance(self.raw_Y, torch.Tensor):
+                self.raw_Y = torch.from_numpy(self.raw_Y).float()
+            else:
+                self.raw_Y = self.raw_Y.float()
+
         # Handle mask if present
         if 'mask' in data:
             self.mask = data['mask']  # Shape: [Total_Time, Num_Assets]
+            # Ensure mask is a tensor
+            if not isinstance(self.mask, torch.Tensor):
+                self.mask = torch.from_numpy(self.mask).float()
+            else:
+                self.mask = self.mask.float()
         else:
             # If no mask, assume all data is valid (use X shape for mask)
-            if isinstance(self.raw_X, torch.Tensor):
-                mask_shape = (self.raw_X.shape[0], self.raw_X.shape[1])
-            else:
-                mask_shape = self.raw_X.shape[:2]
-            self.mask = np.ones(mask_shape, dtype=np.float32)
+            mask_shape = (self.raw_X.shape[0], self.raw_X.shape[1])
+            self.mask = torch.ones(mask_shape, dtype=torch.float32)
 
         self.num_assets = len(self.asset_names)
         self.num_features = self.raw_X.shape[-1]
@@ -72,14 +87,14 @@ class MarketDataset(Dataset):
             if valid_count == 0: valid_count = 1.0  # Safety
 
             # 1. Compute Weighted Mean
-            sum_x = (self.X * mask_expanded).sum(axis=(0, 1), keepdims=True)
+            sum_x = (self.X * mask_expanded).sum(dim=(0, 1), keepdim=True)
             self.feature_mean = sum_x / valid_count
 
             # 2. Compute Weighted Standard Deviation
             # Var = E[X^2] - (E[X])^2
-            sum_x2 = ((self.X ** 2) * mask_expanded).sum(axis=(0, 1), keepdims=True)
+            sum_x2 = ((self.X ** 2) * mask_expanded).sum(dim=(0, 1), keepdim=True)
             mean_x2 = sum_x2 / valid_count
-            self.feature_std = np.sqrt(mean_x2 - self.feature_mean ** 2 + 1e-8)
+            self.feature_std = torch.sqrt(mean_x2 - self.feature_mean ** 2 + 1e-8)
 
             # 3. Apply Normalization
             # Note: (0 - Mean) / Std results in a non-zero value.
@@ -100,8 +115,15 @@ class MarketDataset(Dataset):
             mask_expanded = self.mask[..., None]
 
             if feature_mean is not None and feature_std is not None:
-                self.feature_mean = feature_mean
-                self.feature_std = feature_std
+                # Ensure normalization stats are tensors
+                if not isinstance(feature_mean, torch.Tensor):
+                    self.feature_mean = torch.from_numpy(feature_mean).float()
+                else:
+                    self.feature_mean = feature_mean.float()
+                if not isinstance(feature_std, torch.Tensor):
+                    self.feature_std = torch.from_numpy(feature_std).float()
+                else:
+                    self.feature_std = feature_std.float()
 
                 # Normalize and re-mask
                 self.X = (self.X - self.feature_mean) / self.feature_std
@@ -112,12 +134,12 @@ class MarketDataset(Dataset):
                 valid_count = mask_expanded.sum()
                 if valid_count == 0: valid_count = 1.0
 
-                sum_x = (self.X * mask_expanded).sum(axis=(0, 1), keepdims=True)
+                sum_x = (self.X * mask_expanded).sum(dim=(0, 1), keepdim=True)
                 self.feature_mean = sum_x / valid_count
 
-                sum_x2 = ((self.X ** 2) * mask_expanded).sum(axis=(0, 1), keepdims=True)
+                sum_x2 = ((self.X ** 2) * mask_expanded).sum(dim=(0, 1), keepdim=True)
                 mean_x2 = sum_x2 / valid_count
-                self.feature_std = np.sqrt(mean_x2 - self.feature_mean ** 2 + 1e-8)
+                self.feature_std = torch.sqrt(mean_x2 - self.feature_mean ** 2 + 1e-8)
 
                 self.X = (self.X - self.feature_mean) / self.feature_std
                 self.X = self.X * mask_expanded
@@ -137,25 +159,26 @@ class MarketDataset(Dataset):
         start = self.valid_starts[idx]
         end = start + self.window_size
 
-        # Data is likely numpy arrays from the load, convert to torch here
-        x = torch.from_numpy(self.X[start:end])
-        mask = torch.from_numpy(self.mask[start:end])
+        # X and mask are already tensors
+        x = self.X[start:end]
+        mask = self.mask[start:end]
 
         if self.pretrain_mode:
             # For pre-training: return X[t+1] as regression target
             # Ensure we don't exceed bounds
             if end + 1 <= len(self.X):
-                x_next = torch.from_numpy(self.X[start+1:end+1])
-                mask_next = torch.from_numpy(self.mask[start+1:end+1])
+                x_next = self.X[start+1:end+1]
+                mask_next = self.mask[start+1:end+1]
                 return x, x_next, mask_next
             else:
                 # Fallback: use last available timestep (shouldn't happen due to valid_starts)
-                x_next = torch.from_numpy(self.X[end-1:end])
-                mask_next = torch.from_numpy(self.mask[end-1:end])
+                x_next = self.X[end-1:end]
+                mask_next = self.mask[end-1:end]
                 return x, x_next, mask_next
         else:
             # For fine-tuning: return Y (classification targets)
             if self.Y is None:
                 raise ValueError("Y (targets) not found in dataset. This dataset appears to be for pre-training only.")
-            y = torch.from_numpy(self.Y[start:end])
+            # Y is already a tensor
+            y = self.Y[start:end]
             return x, y, mask
