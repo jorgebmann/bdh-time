@@ -25,6 +25,7 @@ class MarketDataset(Dataset):
             pretrain_mode (bool): If True, return X[t+1] as targets for regression. 
                                  If False, return Y (classification targets).
         """
+        import gc
         self.window_size = window_size
         self.pretrain_mode = pretrain_mode
 
@@ -32,49 +33,53 @@ class MarketDataset(Dataset):
         print(f"Loading processed dataset from {data_path}...")
         data = torch.load(data_path, map_location='cpu')
 
-        self.raw_X = data['X']  # Shape: [Total_Time, Num_Assets, Num_Features]
-        # Y is optional (not present in pre-training datasets)
-        self.raw_Y = data.get('Y', None)  # Shape: [Total_Time, Num_Assets] or None
+        # Extract full tensors
+        full_X = data['X']  # Shape: [Total_Time, Num_Assets, Num_Features]
+        full_Y = data.get('Y', None)  # Shape: [Total_Time, Num_Assets] or None
+        full_mask = data.get('mask', None)  # Shape: [Total_Time, Num_Assets] or None
         self.asset_names = data['asset_names']
 
-        # Ensure X is a tensor
-        if not isinstance(self.raw_X, torch.Tensor):
-            self.raw_X = torch.from_numpy(self.raw_X).float()
+        # Ensure tensors are float
+        if not isinstance(full_X, torch.Tensor):
+            full_X = torch.from_numpy(full_X).float()
         else:
-            self.raw_X = self.raw_X.float()
+            full_X = full_X.float()
 
-        # Ensure Y is a tensor if present
-        if self.raw_Y is not None:
-            if not isinstance(self.raw_Y, torch.Tensor):
-                self.raw_Y = torch.from_numpy(self.raw_Y).float()
+        if full_Y is not None:
+            if not isinstance(full_Y, torch.Tensor):
+                full_Y = torch.from_numpy(full_Y).float()
             else:
-                self.raw_Y = self.raw_Y.float()
+                full_Y = full_Y.float()
 
-        # Handle mask if present
-        if 'mask' in data:
-            self.mask = data['mask']  # Shape: [Total_Time, Num_Assets]
-            # Ensure mask is a tensor
-            if not isinstance(self.mask, torch.Tensor):
-                self.mask = torch.from_numpy(self.mask).float()
+        if full_mask is not None:
+            if not isinstance(full_mask, torch.Tensor):
+                full_mask = torch.from_numpy(full_mask).float()
             else:
-                self.mask = self.mask.float()
+                full_mask = full_mask.float()
         else:
-            # If no mask, assume all data is valid (use X shape for mask)
-            mask_shape = (self.raw_X.shape[0], self.raw_X.shape[1])
-            self.mask = torch.ones(mask_shape, dtype=torch.float32)
+            # Create default mask if not present
+            mask_shape = (full_X.shape[0], full_X.shape[1])
+            full_mask = torch.ones(mask_shape, dtype=torch.float32)
 
         self.num_assets = len(self.asset_names)
-        self.num_features = self.raw_X.shape[-1]
+        self.num_features = full_X.shape[-1]
 
-        # Train/Val Split (Time-based)
-        total_timesteps = self.raw_X.shape[0]
+        # Calculate split indices BEFORE slicing
+        total_timesteps = full_X.shape[0]
         split_idx = int(total_timesteps * (1 - val_split))
 
+        # Extract only the needed split and immediately delete full tensors
         if split == 'train':
-            self.X = self.raw_X[:split_idx]
-            self.Y = self.raw_Y[:split_idx] if self.raw_Y is not None else None
-            self.mask = self.mask[:split_idx]
-
+            # Slice training data
+            self.raw_X = full_X[:split_idx].clone()
+            self.raw_Y = full_Y[:split_idx].clone() if full_Y is not None else None
+            self.mask = full_mask[:split_idx].clone()
+            
+            # Delete full tensors immediately to free memory
+            del full_X, full_Y, full_mask
+            del data
+            gc.collect()
+            
             # --- MASKED NORMALIZATION ---
             # We must compute mean/std ONLY on valid data points.
             # Including the 0-padding from pre-IPO dates would skew stats towards zero.
@@ -87,29 +92,41 @@ class MarketDataset(Dataset):
             if valid_count == 0: valid_count = 1.0  # Safety
 
             # 1. Compute Weighted Mean
-            sum_x = (self.X * mask_expanded).sum(dim=(0, 1), keepdim=True)
+            sum_x = (self.raw_X * mask_expanded).sum(dim=(0, 1), keepdim=True)
             self.feature_mean = sum_x / valid_count
 
             # 2. Compute Weighted Standard Deviation
             # Var = E[X^2] - (E[X])^2
-            sum_x2 = ((self.X ** 2) * mask_expanded).sum(dim=(0, 1), keepdim=True)
+            sum_x2 = ((self.raw_X ** 2) * mask_expanded).sum(dim=(0, 1), keepdim=True)
             mean_x2 = sum_x2 / valid_count
             self.feature_std = torch.sqrt(mean_x2 - self.feature_mean ** 2 + 1e-8)
 
             # 3. Apply Normalization
             # Note: (0 - Mean) / Std results in a non-zero value.
             # We must apply the mask again to force padded regions back to 0.0.
-            self.X = (self.X - self.feature_mean) / self.feature_std
+            self.X = (self.raw_X - self.feature_mean) / self.feature_std
             self.X = self.X * mask_expanded
+            
+            # Delete raw_X after normalization to save memory (keep normalized X)
+            del self.raw_X
+            # Set Y for consistency (Y doesn't need normalization)
+            self.Y = self.raw_Y
+            gc.collect()
 
             print(f"Normalized training features (masked):")
             print(f"  Mean: {self.feature_mean.squeeze()}")
             print(f"  Std:  {self.feature_std.squeeze()}")
 
         else:
-            self.X = self.raw_X[split_idx:]
-            self.Y = self.raw_Y[split_idx:] if self.raw_Y is not None else None
-            self.mask = self.mask[split_idx:]
+            # Slice validation data
+            self.raw_X = full_X[split_idx:].clone()
+            self.raw_Y = full_Y[split_idx:].clone() if full_Y is not None else None
+            self.mask = full_mask[split_idx:].clone()
+            
+            # Delete full tensors immediately to free memory
+            del full_X, full_Y, full_mask
+            del data
+            gc.collect()
 
             # Use provided normalization statistics (from training set)
             mask_expanded = self.mask[..., None]
@@ -126,23 +143,37 @@ class MarketDataset(Dataset):
                     self.feature_std = feature_std.float()
 
                 # Normalize and re-mask
-                self.X = (self.X - self.feature_mean) / self.feature_std
+                self.X = (self.raw_X - self.feature_mean) / self.feature_std
                 self.X = self.X * mask_expanded
+                
+                # Delete raw_X after normalization
+                del self.raw_X
+                # Set Y for consistency (Y doesn't need normalization)
+                self.Y = self.raw_Y
+                gc.collect()
+                
                 print(f"Applied normalization from training set")
             else:
                 # Fallback: compute on validation set (masked)
                 valid_count = mask_expanded.sum()
                 if valid_count == 0: valid_count = 1.0
 
-                sum_x = (self.X * mask_expanded).sum(dim=(0, 1), keepdim=True)
+                sum_x = (self.raw_X * mask_expanded).sum(dim=(0, 1), keepdim=True)
                 self.feature_mean = sum_x / valid_count
 
-                sum_x2 = ((self.X ** 2) * mask_expanded).sum(dim=(0, 1), keepdim=True)
+                sum_x2 = ((self.raw_X ** 2) * mask_expanded).sum(dim=(0, 1), keepdim=True)
                 mean_x2 = sum_x2 / valid_count
                 self.feature_std = torch.sqrt(mean_x2 - self.feature_mean ** 2 + 1e-8)
 
-                self.X = (self.X - self.feature_mean) / self.feature_std
+                self.X = (self.raw_X - self.feature_mean) / self.feature_std
                 self.X = self.X * mask_expanded
+                
+                # Delete raw_X after normalization
+                del self.raw_X
+                # Set Y for consistency (Y doesn't need normalization)
+                self.Y = self.raw_Y
+                gc.collect()
+                
                 print(f"Warning: Using validation set statistics for normalization")
 
         # For pretrain_mode, we need an extra timestep for the target (X[t+1])

@@ -45,76 +45,114 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 def load_dataset_info(data_path):
     """Load and display dataset metadata without loading full tensors."""
     import gc
+    from pathlib import Path
     
     print(f"\nLoading dataset metadata from {data_path}...")
     
+    # Check file size first
+    file_size = Path(data_path).stat().st_size
+    file_size_gb = file_size / (1024**3)
+    print(f"Dataset file size: {file_size_gb:.2f} GB")
+    
+    info = None
+    
     try:
+        # Try to load checkpoint - this may fail if file is too large
         checkpoint = torch.load(data_path, map_location='cpu', weights_only=False)
         
-        # Extract shapes before clearing
-        x_tensor = checkpoint.get('X', None)
-        y_tensor = checkpoint.get('Y', None)
-        mask_tensor = checkpoint.get('mask', None)
-        
-        x_shape_str = str(x_tensor.shape) if x_tensor is not None and hasattr(x_tensor, 'shape') else 'N/A'
-        y_shape_str = str(y_tensor.shape) if y_tensor is not None and hasattr(y_tensor, 'shape') else 'N/A'
-        mask_shape_str = str(mask_tensor.shape) if mask_tensor is not None and hasattr(mask_tensor, 'shape') else 'N/A'
-        
-        # Calculate coverage if mask exists
-        coverage = None
-        if mask_tensor is not None and hasattr(mask_tensor, 'sum'):
-            coverage = mask_tensor.sum().item() / mask_tensor.numel() * 100
-        
-        # Extract feature count
+        # Extract shapes immediately before any operations
+        x_shape = None
+        y_shape = None
+        mask_shape = None
         num_features = None
-        if x_tensor is not None and hasattr(x_tensor, 'shape') and len(x_tensor.shape) >= 3:
-            num_features = x_tensor.shape[-1]
+        coverage = None
         
-        # Extract metadata
+        if 'X' in checkpoint:
+            x_tensor = checkpoint['X']
+            x_shape = x_tensor.shape
+            num_features = x_shape[-1] if len(x_shape) >= 3 else None
+            # Delete immediately
+            del checkpoint['X']
+            del x_tensor
+        
+        if 'Y' in checkpoint:
+            y_tensor = checkpoint['Y']
+            y_shape = y_tensor.shape
+            del checkpoint['Y']
+            del y_tensor
+        
+        if 'mask' in checkpoint:
+            mask_tensor = checkpoint['mask']
+            mask_shape = mask_tensor.shape
+            # Calculate coverage quickly before deleting
+            try:
+                coverage = mask_tensor.sum().item() / mask_tensor.numel() * 100
+            except:
+                pass
+            del checkpoint['mask']
+            del mask_tensor
+        
+        # Force garbage collection
+        gc.collect()
+        
+        # Extract metadata (small objects)
         info = {
             'asset_names': checkpoint.get('asset_names', []),
             'feature_names': checkpoint.get('feature_names', []),
             'asset_date_ranges': checkpoint.get('asset_date_ranges', []),
             'union_dates': checkpoint.get('union_dates', []),
-            'x_shape': x_shape_str,
-            'y_shape': y_shape_str,
-            'mask_shape': mask_shape_str,
+            'x_shape': str(x_shape) if x_shape is not None else 'N/A',
+            'y_shape': str(y_shape) if y_shape is not None else 'N/A',
+            'mask_shape': str(mask_shape) if mask_shape is not None else 'N/A',
             'coverage': coverage,
             'num_features': num_features
         }
         
-        # Immediately delete large tensors to free memory
-        if 'X' in checkpoint:
-            del checkpoint['X']
-        if 'Y' in checkpoint:
-            del checkpoint['Y']
-        if 'mask' in checkpoint:
-            del checkpoint['mask']
-        del x_tensor, y_tensor, mask_tensor, checkpoint
+        del checkpoint
         gc.collect()
         
+    except RuntimeError as e:
+        if "can't allocate memory" in str(e) or "Cannot allocate memory" in str(e):
+            print(f"Warning: Cannot load full dataset into memory ({file_size_gb:.2f} GB).")
+            print("Skipping detailed metadata extraction. Dataset will be loaded in chunks.")
+            # Return minimal info
+            info = {
+                'asset_names': [],
+                'feature_names': [],
+                'asset_date_ranges': [],
+                'union_dates': [],
+                'x_shape': 'Unknown (file too large)',
+                'y_shape': 'N/A',
+                'mask_shape': 'Unknown (file too large)',
+                'coverage': None,
+                'num_features': None
+            }
+        else:
+            raise
     except Exception as e:
         print(f"Error loading dataset: {e}")
         import traceback
         traceback.print_exc()
         return None
     
-    print("\n" + "="*60)
-    print("DATASET INFORMATION")
-    print("="*60)
-    print(f"Dataset path: {data_path}")
-    print(f"X shape: {info['x_shape']}")
-    print(f"Y shape: {info['y_shape']}")
-    if info['mask_shape'] != 'N/A':
-        print(f"Mask shape: {info['mask_shape']}")
-        if info['coverage'] is not None:
-            print(f"Data coverage: {info['coverage']:.1f}%")
-    print(f"Number of assets: {len(info['asset_names'])}")
-    if info['num_features'] is not None:
-        print(f"Number of features: {info['num_features']}")
-    if info['feature_names']:
-        print(f"Features: {info['feature_names']}")
-    print("="*60 + "\n")
+    if info:
+        print("\n" + "="*60)
+        print("DATASET INFORMATION")
+        print("="*60)
+        print(f"Dataset path: {data_path}")
+        print(f"File size: {file_size_gb:.2f} GB")
+        print(f"X shape: {info['x_shape']}")
+        print(f"Y shape: {info['y_shape']}")
+        if info['mask_shape'] != 'N/A' and 'Unknown' not in info['mask_shape']:
+            print(f"Mask shape: {info['mask_shape']}")
+            if info['coverage'] is not None:
+                print(f"Data coverage: {info['coverage']:.1f}%")
+        print(f"Number of assets: {len(info['asset_names'])}")
+        if info['num_features'] is not None:
+            print(f"Number of features: {info['num_features']}")
+        if info['feature_names']:
+            print(f"Features: {info['feature_names']}")
+        print("="*60 + "\n")
     
     return info
 
