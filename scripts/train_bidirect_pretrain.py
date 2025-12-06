@@ -42,6 +42,24 @@ DEFAULT_DROPOUT = 0.3
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# Validate CUDA is actually working before enabling pin_memory
+CUDA_AVAILABLE = False
+if DEVICE.type == 'cuda':
+    try:
+        # Test CUDA is working
+        test_tensor = torch.zeros(1).to(DEVICE)
+        del test_tensor
+        torch.cuda.empty_cache()
+        CUDA_AVAILABLE = True
+        print(f"CUDA device validated: {torch.cuda.get_device_name(0)}")
+    except Exception as e:
+        print(f"Warning: CUDA device detected but initialization failed: {e}")
+        print("Falling back to CPU")
+        DEVICE = torch.device("cpu")
+        CUDA_AVAILABLE = False
+else:
+    CUDA_AVAILABLE = False
+
 def load_dataset_info(data_path):
     """Load and display dataset metadata without loading full tensors."""
     import gc
@@ -211,14 +229,14 @@ def train(args):
         batch_size=args.batch_size, 
         shuffle=True,
         num_workers=0,
-        pin_memory=True if DEVICE.type == 'cuda' else False
+        pin_memory=CUDA_AVAILABLE  # Only enable if CUDA is validated
     )
     val_loader = DataLoader(
         val_dataset, 
         batch_size=args.batch_size, 
         shuffle=False,
         num_workers=0,
-        pin_memory=True if DEVICE.type == 'cuda' else False
+        pin_memory=CUDA_AVAILABLE  # Only enable if CUDA is validated
     )
     
     # 2. Initialize Model
